@@ -1,8 +1,7 @@
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-from google import genai
-from google.genai import types
+from groq import Groq
 import json
 import os
 import asyncio
@@ -39,12 +38,12 @@ def save_config(cfg):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
-# Discord + Gemini setup
+# Discord + Groq setup
 
 DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+groq_client = Groq(api_key=GROQ_API_KEY)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -67,27 +66,17 @@ Regles :
 - Reponses courtes (max 55 caracteres chacune)
 - Uniquement du JSON, rien d autre"""
 
-    def _call_gemini():
-        response = gemini_client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json"
-            )
+    def _call_groq():
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0.9
         )
-        return response.text
+        return response.choices[0].message.content
 
-    text = await asyncio.to_thread(_call_gemini)
-    text = text.strip()
-
-    # Strip markdown fences if present
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-    text = text.strip()
-
-    return json.loads(text)
+    text = await asyncio.to_thread(_call_groq)
+    return json.loads(text.strip())
 
 # Poll sender
 
@@ -119,7 +108,7 @@ async def send_scheduled_poll(interaction: discord.Interaction = None):
         poll_data = await generate_poll(cfg["theme"])
     except Exception as e:
         logger.error(f"Erreur generation sondage : {e}")
-        await report_error(f"Impossible de generer un sondage via Gemini : {type(e).__name__}: {e}")
+        await report_error(f"Impossible de generer un sondage via Groq : {type(e).__name__}: {e}")
         return
 
     answers = [discord.PollAnswer(text=ans) for ans in poll_data["answers"]]
