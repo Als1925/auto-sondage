@@ -53,16 +53,16 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # AI Poll Generation
 
 POLL_ANGLES = [
-    "une question de type 'tu preferes... ou ...' tres tranchee",
-    "un debat sans bonne reponse qui va diviser la communaute",
-    "une question nostalgique ou retro",
-    "une question absurde et inattendue",
-    "un classement ou tier list",
-    "une question sur les habitudes et comportements",
-    "une question hypothetique et creative",
-    "un 'qui dans ce serveur...' ou 'lequel de ces trucs...'",
-    "une question de type 'hot take / opinion impopulaire'",
-    "une question sur des preferences tres specifiques et de niche",
+    "une question de type 'tu preferes X ou Y'",
+    "une question sur les habitudes et comportements des gens",
+    "une question nostalgique sur le passe",
+    "une question sur les preferences personnelles",
+    "un classement entre plusieurs options",
+    "une question sur la facon de jouer ou de faire les choses",
+    "une question sur les opinions de la communaute",
+    "une question sur les experiences vecues",
+    "une question sur ce que les gens font en premier ou en dernier",
+    "une question sur les petites preferences du quotidien",
 ]
 
 async def generate_poll(theme: str) -> dict:
@@ -100,7 +100,7 @@ Regles :
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
-            temperature=1.2,
+            temperature=0.9,
             top_p=0.95,
         )
         return response.choices[0].message.content
