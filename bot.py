@@ -23,7 +23,8 @@ DEFAULT_CONFIG = {
     "custom_message": "Un nouveau sondage est disponible ! Votez maintenant !",
     "thread_hook": "Discutez de vos reponses ici !",
     "poll_duration_hours": 24,
-    "next_poll_time": None
+    "next_poll_time": None,
+    "recent_questions": []
 }
 
 def load_config():
@@ -52,41 +53,23 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # AI Poll Generation
 
-POLL_ANGLES = [
-    "une question de type 'tu preferes X ou Y'",
-    "une question sur les habitudes et comportements des gens",
-    "une question nostalgique sur le passe",
-    "une question sur les preferences personnelles",
-    "un classement entre plusieurs options",
-    "une question sur la facon de jouer ou de faire les choses",
-    "une question sur les opinions de la communaute",
-    "une question sur les experiences vecues",
-    "une question sur ce que les gens font en premier ou en dernier",
-    "une question sur les petites preferences du quotidien",
-]
+async def generate_poll(theme: str, recent_questions: list = []) -> dict:
+    recent_str = ""
+    if recent_questions:
+        recent_str = "\n\nQuestions deja posees recemment (ne pas repeter le meme sujet) :\n- " + "\n- ".join(recent_questions[-5:])
 
-async def generate_poll(theme: str) -> dict:
-    angle = random.choice(POLL_ANGLES)
-    seed = random.randint(1000, 9999)
-
-    prompt = f"""Tu es un createur de sondages Discord ultra creatif et divertissant.
-
-Cree UN sondage completement UNIQUE et ORIGINAL sur le theme : "{theme}".
-Angle impose : {angle}
-Seed de creativite : {seed} (utilise ce nombre pour varier ton inspiration)
-
-IMPORTANT : Evite absolument les questions generiques comme "Quel est ton X prefere ?".
-Sois specifique, surprenant, drole ou provocateur (dans le bon sens).
+    prompt = f"""Genere un sondage Discord sur le theme : "{theme}".{recent_str}
 
 Reponds UNIQUEMENT en JSON valide :
 {{
-  "question": "La question (max 300 caracteres, accrocheuse et originale)",
+  "question": "La question (max 300 caracteres)",
   "answers": ["Reponse A", "Reponse B", "Reponse C", "Reponse D"]
 }}
 
 Regles :
-- 3 a 5 reponses, courtes (max 55 caracteres)
-- La question doit donner envie de voter ET de debattre dans les commentaires
+- 3 a 5 reponses courtes (max 55 caracteres)
+- Question simple, naturelle, qui donne envie de voter
+- Varie le type : preference, habitude, opinion, experience...
 - Uniquement du JSON, rien d autre"""
 
     def _call_groq():
@@ -95,13 +78,12 @@ Regles :
             messages=[
                 {
                     "role": "system",
-                    "content": "Tu es un expert en engagement communautaire sur Discord. Tu crees des sondages originaux, jamais repetitifs, toujours adaptes au theme donne. Tu varies constamment le style et l angle des questions."
+                    "content": f"Tu crees des sondages Discord simples et engageants sur le theme : {theme}. Chaque sondage doit etre different des precedents en termes de sujet et de formulation."
                 },
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
-            temperature=0.9,
-            top_p=0.95,
+            temperature=0.85,
         )
         return response.choices[0].message.content
 
@@ -135,7 +117,7 @@ async def send_scheduled_poll(interaction: discord.Interaction = None):
             return
 
     try:
-        poll_data = await generate_poll(cfg["theme"])
+        poll_data = await generate_poll(cfg["theme"], cfg.get("recent_questions", []))
     except Exception as e:
         logger.error(f"Erreur generation sondage : {e}")
         await report_error(f"Impossible de generer un sondage via Groq : {type(e).__name__}: {e}")
@@ -176,6 +158,9 @@ async def send_scheduled_poll(interaction: discord.Interaction = None):
 
     next_time = datetime.utcnow() + timedelta(minutes=cfg["interval_minutes"])
     cfg["next_poll_time"] = next_time.isoformat()
+    recent = cfg.get("recent_questions", [])
+    recent.append(poll_data["question"])
+    cfg["recent_questions"] = recent[-20:]  # garde les 20 dernieres
     save_config(cfg)
 
 # Scheduler
@@ -282,6 +267,9 @@ async def startschedule(interaction: discord.Interaction):
         return
     next_time = datetime.utcnow() + timedelta(minutes=cfg["interval_minutes"])
     cfg["next_poll_time"] = next_time.isoformat()
+    recent = cfg.get("recent_questions", [])
+    recent.append(poll_data["question"])
+    cfg["recent_questions"] = recent[-20:]  # garde les 20 dernieres
     save_config(cfg)
     h, m = divmod(cfg["interval_minutes"], 60)
     label = f"{h}h{m:02d}" if h else f"{m}min"
