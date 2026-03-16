@@ -11,16 +11,16 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ─── Config ───────────────────────────────────────────────────────────────────
+# Config
 
 CONFIG_FILE = "config.json"
 
 DEFAULT_CONFIG = {
-    "theme": "culture générale",
+    "theme": "culture generale",
     "interval_minutes": 60,
     "channel_id": None,
-    "custom_message": "🗳️ Un nouveau sondage est disponible ! Votez maintenant !",
-    "thread_hook": "💬 Discutez de vos réponses ici !",
+    "custom_message": "Un nouveau sondage est disponible ! Votez maintenant !",
+    "thread_hook": "Discutez de vos reponses ici !",
     "poll_duration_hours": 24,
     "next_poll_time": None
 }
@@ -40,34 +40,34 @@ def save_config(cfg):
 
 config = load_config()
 
-# ─── Discord + Gemini setup ───────────────────────────────────────────────────
+# Discord + Gemini setup
 
 DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
 genai.configure(api_key=GEMINI_API_KEY)
-gemini = genai.GenerativeModel("gemini-1.5-flash")
+gemini = genai.GenerativeModel("gemini-2.0-flash")
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ─── AI Poll Generation ───────────────────────────────────────────────────────
+# AI Poll Generation
 
 async def generate_poll(theme: str) -> dict:
-    prompt = f"""Génère un sondage Discord amusant et original sur le thème : "{theme}".
+    prompt = f"""Genere un sondage Discord amusant et original sur le theme : "{theme}".
 
-Réponds UNIQUEMENT en JSON valide avec cette structure exacte :
+Reponds UNIQUEMENT en JSON valide avec cette structure exacte :
 {{
-  "question": "La question du sondage (max 300 caractères)",
-  "answers": ["Réponse 1", "Réponse 2", "Réponse 3", "Réponse 4", "Réponse 5"]
+  "question": "La question du sondage (max 300 caracteres)",
+  "answers": ["Reponse 1", "Reponse 2", "Reponse 3", "Reponse 4", "Reponse 5"]
 }}
 
-Règles :
-- 3 à 5 réponses maximum
+Regles :
+- 3 a 5 reponses maximum
 - Question engageante et fun
-- Réponses courtes (max 55 caractères chacune)
-- Uniquement du JSON, rien d'autre"""
+- Reponses courtes (max 55 caracteres chacune)
+- Uniquement du JSON, rien d autre"""
 
     response = await asyncio.to_thread(gemini.generate_content, prompt)
     text = response.text.strip()
@@ -82,31 +82,42 @@ Règles :
     data = json.loads(text)
     return data
 
-# ─── Poll sender ──────────────────────────────────────────────────────────────
+# Poll sender
 
-async def send_scheduled_poll():
+async def send_scheduled_poll(interaction: discord.Interaction = None):
     cfg = load_config()
     channel_id = cfg.get("channel_id")
+
+    async def report_error(msg: str):
+        logger.error(msg)
+        if interaction:
+            try:
+                await interaction.followup.send(f"Erreur : {msg}", ephemeral=True)
+            except Exception:
+                pass
+
     if not channel_id:
-        logger.warning("Aucun salon configuré pour les sondages.")
+        await report_error("Aucun salon configure. Utilise /setchannel d'abord.")
         return
 
+    # Try cache first, then fetch
     channel = bot.get_channel(int(channel_id))
     if not channel:
-        logger.error(f"Salon {channel_id} introuvable.")
-        return
+        try:
+            channel = await bot.fetch_channel(int(channel_id))
+        except Exception:
+            await report_error(f"Salon introuvable (id: {channel_id}). Reconfigure avec /setchannel.")
+            return
 
     try:
         poll_data = await generate_poll(cfg["theme"])
     except Exception as e:
-        logger.error(f"Erreur génération sondage : {e}")
-        await channel.send("⚠️ Impossible de générer un sondage pour le moment.")
+        logger.error(f"Erreur generation sondage : {e}")
+        await report_error(f"Impossible de generer un sondage via Gemini : {type(e).__name__}: {e}")
         return
 
     # Build Discord Poll
-    answers = [
-        discord.PollAnswer(text=ans) for ans in poll_data["answers"]
-    ]
+    answers = [discord.PollAnswer(text=ans) for ans in poll_data["answers"]]
     poll = discord.Poll(
         question=poll_data["question"],
         duration=timedelta(hours=cfg["poll_duration_hours"]),
@@ -114,27 +125,43 @@ async def send_scheduled_poll():
         answers=answers
     )
 
-    # Send poll
-    poll_msg = await channel.send(poll=poll)
+    try:
+        # Send poll
+        await channel.send(poll=poll)
 
-    # Send custom message
-    custom_msg = await channel.send(cfg["custom_message"])
+        # Send custom message
+        custom_msg = await channel.send(cfg["custom_message"])
 
-    # Create public thread on custom message
-    thread = await custom_msg.create_thread(
-        name=f"💬 {poll_data['question'][:90]}",
-        auto_archive_duration=1440
-    )
-    await thread.send(cfg["thread_hook"])
+        # Create public thread on custom message
+        thread = await custom_msg.create_thread(
+            name=poll_data["question"][:90],
+            auto_archive_duration=1440
+        )
+        await thread.send(cfg["thread_hook"])
 
-    logger.info(f"✅ Sondage envoyé dans #{channel.name}")
+    except discord.Forbidden:
+        await report_error(
+            f"Le bot n'a pas les permissions dans le salon id {channel_id}. "
+            "Verifie que le bot a : Envoyer des messages, Creer des fils publics, Envoyer dans les fils."
+        )
+        return
+    except Exception as e:
+        await report_error(f"Erreur lors de l'envoi : {e}")
+        return
+
+    logger.info(f"Sondage envoye dans #{channel.name}")
+    if interaction:
+        try:
+            await interaction.followup.send(f"Sondage envoye dans {channel.mention} !", ephemeral=True)
+        except Exception:
+            pass
 
     # Schedule next
     next_time = datetime.utcnow() + timedelta(minutes=cfg["interval_minutes"])
     cfg["next_poll_time"] = next_time.isoformat()
     save_config(cfg)
 
-# ─── Scheduler ────────────────────────────────────────────────────────────────
+# Scheduler
 
 @tasks.loop(minutes=1)
 async def poll_scheduler():
@@ -149,54 +176,54 @@ async def poll_scheduler():
     if datetime.utcnow() >= next_time:
         await send_scheduled_poll()
 
-# ─── Slash Commands ───────────────────────────────────────────────────────────
+# Slash Commands
 
 @bot.event
 async def on_ready():
     await bot.tree.sync()
     poll_scheduler.start()
-    logger.info(f"✅ Bot connecté en tant que {bot.user}")
+    logger.info(f"Bot connecte en tant que {bot.user}")
 
-@bot.tree.command(name="settheme", description="Définir le thème des sondages")
-@app_commands.describe(theme="Ex: Minecraft, cinéma, culture générale...")
+@bot.tree.command(name="settheme", description="Definir le theme des sondages")
+@app_commands.describe(theme="Ex: Minecraft, cinema, culture generale...")
 @app_commands.checks.has_permissions(administrator=True)
 async def settheme(interaction: discord.Interaction, theme: str):
     cfg = load_config()
     cfg["theme"] = theme
     save_config(cfg)
-    await interaction.response.send_message(f"✅ Thème mis à jour : **{theme}**", ephemeral=True)
+    await interaction.response.send_message(f"Theme mis a jour : **{theme}**", ephemeral=True)
 
-@bot.tree.command(name="setinterval", description="Définir l'intervalle entre les sondages")
+@bot.tree.command(name="setinterval", description="Definir l'intervalle entre les sondages")
 @app_commands.describe(minutes="Intervalle en minutes (ex: 60 = 1h, 1440 = 1j)")
 @app_commands.checks.has_permissions(administrator=True)
 async def setinterval(interaction: discord.Interaction, minutes: int):
     if minutes < 5:
-        await interaction.response.send_message("❌ Minimum 5 minutes.", ephemeral=True)
+        await interaction.response.send_message("Minimum 5 minutes.", ephemeral=True)
         return
     cfg = load_config()
     cfg["interval_minutes"] = minutes
     save_config(cfg)
     h, m = divmod(minutes, 60)
     label = f"{h}h{m:02d}" if h else f"{m}min"
-    await interaction.response.send_message(f"✅ Intervalle mis à jour : **{label}**", ephemeral=True)
+    await interaction.response.send_message(f"Intervalle mis a jour : **{label}**", ephemeral=True)
 
-@bot.tree.command(name="setchannel", description="Définir le salon pour les sondages")
+@bot.tree.command(name="setchannel", description="Definir le salon pour les sondages")
 @app_commands.describe(channel="Le salon texte cible")
 @app_commands.checks.has_permissions(administrator=True)
 async def setchannel(interaction: discord.Interaction, channel: discord.TextChannel):
     cfg = load_config()
     cfg["channel_id"] = str(channel.id)
     save_config(cfg)
-    await interaction.response.send_message(f"✅ Salon défini : {channel.mention}", ephemeral=True)
+    await interaction.response.send_message(f"Salon defini : {channel.mention}", ephemeral=True)
 
 @bot.tree.command(name="setmessage", description="Personnaliser le message accompagnant le sondage")
-@app_commands.describe(message="Le message à envoyer après le sondage")
+@app_commands.describe(message="Le message a envoyer apres le sondage")
 @app_commands.checks.has_permissions(administrator=True)
 async def setmessage(interaction: discord.Interaction, message: str):
     cfg = load_config()
     cfg["custom_message"] = message
     save_config(cfg)
-    await interaction.response.send_message(f"✅ Message mis à jour : **{message}**", ephemeral=True)
+    await interaction.response.send_message(f"Message mis a jour : **{message}**", ephemeral=True)
 
 @bot.tree.command(name="setthread", description="Personnaliser la phrase d'accroche du fil")
 @app_commands.describe(phrase="La phrase d'introduction dans le fil")
@@ -205,36 +232,36 @@ async def setthread(interaction: discord.Interaction, phrase: str):
     cfg = load_config()
     cfg["thread_hook"] = phrase
     save_config(cfg)
-    await interaction.response.send_message(f"✅ Phrase de fil mise à jour : **{phrase}**", ephemeral=True)
+    await interaction.response.send_message(f"Phrase de fil mise a jour : **{phrase}**", ephemeral=True)
 
-@bot.tree.command(name="setpollduration", description="Durée du sondage en heures")
-@app_commands.describe(heures="Durée en heures (1 à 168)")
+@bot.tree.command(name="setpollduration", description="Duree du sondage en heures")
+@app_commands.describe(heures="Duree en heures (1 a 168)")
 @app_commands.checks.has_permissions(administrator=True)
 async def setpollduration(interaction: discord.Interaction, heures: int):
     if not 1 <= heures <= 168:
-        await interaction.response.send_message("❌ Entre 1 et 168 heures (1 semaine max).", ephemeral=True)
+        await interaction.response.send_message("Entre 1 et 168 heures (1 semaine max).", ephemeral=True)
         return
     cfg = load_config()
     cfg["poll_duration_hours"] = heures
     save_config(cfg)
-    await interaction.response.send_message(f"✅ Durée du sondage : **{heures}h**", ephemeral=True)
+    await interaction.response.send_message(f"Duree du sondage : **{heures}h**", ephemeral=True)
 
-@bot.tree.command(name="startnow", description="Lancer le prochain sondage immédiatement")
+@bot.tree.command(name="startnow", description="Lancer le prochain sondage immediatement")
 @app_commands.checks.has_permissions(administrator=True)
 async def startnow(interaction: discord.Interaction):
     cfg = load_config()
     if not cfg.get("channel_id"):
-        await interaction.response.send_message("❌ Configure d'abord un salon avec `/setchannel`.", ephemeral=True)
+        await interaction.response.send_message("Configure d'abord un salon avec /setchannel.", ephemeral=True)
         return
-    await interaction.response.send_message("⏳ Génération du sondage en cours...", ephemeral=True)
-    await send_scheduled_poll()
+    await interaction.response.defer(ephemeral=True)
+    await send_scheduled_poll(interaction=interaction)
 
-@bot.tree.command(name="startschedule", description="Démarrer la planification automatique")
+@bot.tree.command(name="startschedule", description="Demarrer la planification automatique")
 @app_commands.checks.has_permissions(administrator=True)
 async def startschedule(interaction: discord.Interaction):
     cfg = load_config()
     if not cfg.get("channel_id"):
-        await interaction.response.send_message("❌ Configure d'abord un salon avec `/setchannel`.", ephemeral=True)
+        await interaction.response.send_message("Configure d'abord un salon avec /setchannel.", ephemeral=True)
         return
     next_time = datetime.utcnow() + timedelta(minutes=cfg["interval_minutes"])
     cfg["next_poll_time"] = next_time.isoformat()
@@ -242,16 +269,16 @@ async def startschedule(interaction: discord.Interaction):
     h, m = divmod(cfg["interval_minutes"], 60)
     label = f"{h}h{m:02d}" if h else f"{m}min"
     await interaction.response.send_message(
-        f"✅ Planification démarrée ! Premier sondage dans **{label}**.", ephemeral=True
+        f"Planification demarree ! Premier sondage dans **{label}**.", ephemeral=True
     )
 
-@bot.tree.command(name="stopschedule", description="Arrêter la planification automatique")
+@bot.tree.command(name="stopschedule", description="Arreter la planification automatique")
 @app_commands.checks.has_permissions(administrator=True)
 async def stopschedule(interaction: discord.Interaction):
     cfg = load_config()
     cfg["next_poll_time"] = None
     save_config(cfg)
-    await interaction.response.send_message("⏹️ Planification arrêtée.", ephemeral=True)
+    await interaction.response.send_message("Planification arretee.", ephemeral=True)
 
 @bot.tree.command(name="status", description="Voir la configuration actuelle du bot")
 @app_commands.checks.has_permissions(administrator=True)
@@ -261,7 +288,7 @@ async def status(interaction: discord.Interaction):
     h, m = divmod(cfg["interval_minutes"], 60)
     interval_label = f"{h}h{m:02d}" if h else f"{m}min"
 
-    next_poll = "Non planifié"
+    next_poll = "Non planifie"
     if cfg.get("next_poll_time"):
         try:
             dt = datetime.fromisoformat(cfg["next_poll_time"])
@@ -269,14 +296,14 @@ async def status(interaction: discord.Interaction):
         except Exception:
             next_poll = "Erreur de parsing"
 
-    embed = discord.Embed(title="📊 Statut du Poll Bot", color=0x5865F2)
-    embed.add_field(name="🎯 Thème", value=cfg["theme"], inline=True)
-    embed.add_field(name="⏱️ Intervalle", value=interval_label, inline=True)
-    embed.add_field(name="⏳ Durée sondage", value=f"{cfg['poll_duration_hours']}h", inline=True)
-    embed.add_field(name="📢 Salon", value=channel.mention if channel else "Non défini", inline=True)
-    embed.add_field(name="🕐 Prochain sondage", value=next_poll, inline=True)
-    embed.add_field(name="💬 Message", value=cfg["custom_message"][:100], inline=False)
-    embed.add_field(name="🧵 Phrase fil", value=cfg["thread_hook"][:100], inline=False)
+    embed = discord.Embed(title="Statut du Poll Bot", color=0x5865F2)
+    embed.add_field(name="Theme", value=cfg["theme"], inline=True)
+    embed.add_field(name="Intervalle", value=interval_label, inline=True)
+    embed.add_field(name="Duree sondage", value=f"{cfg['poll_duration_hours']}h", inline=True)
+    embed.add_field(name="Salon", value=channel.mention if channel else f"id: {cfg.get('channel_id', 'Non defini')}", inline=True)
+    embed.add_field(name="Prochain sondage", value=next_poll, inline=True)
+    embed.add_field(name="Message", value=cfg["custom_message"][:100], inline=False)
+    embed.add_field(name="Phrase fil", value=cfg["thread_hook"][:100], inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 bot.run(DISCORD_TOKEN)
