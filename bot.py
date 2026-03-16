@@ -111,7 +111,7 @@ async def send_scheduled_poll(interaction: discord.Interaction = None):
         await report_error(f"Impossible de generer un sondage via Groq : {type(e).__name__}: {e}")
         return
 
-    answers = [discord.PollAnswer(text=ans) for ans in poll_data["answers"]]
+    answers = [discord.PollAnswer(ans) for ans in poll_data["answers"]]
     poll = discord.Poll(
         question=poll_data["question"],
         duration=timedelta(hours=cfg["poll_duration_hours"]),
