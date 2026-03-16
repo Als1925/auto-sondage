@@ -51,27 +51,56 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # AI Poll Generation
 
-async def generate_poll(theme: str) -> dict:
-    prompt = f"""Genere un sondage Discord amusant et original sur le theme : "{theme}".
+POLL_ANGLES = [
+    "une question de type 'tu preferes... ou ...' tres tranchee",
+    "un debat sans bonne reponse qui va diviser la communaute",
+    "une question nostalgique ou retro",
+    "une question absurde et inattendue",
+    "un classement ou tier list",
+    "une question sur les habitudes et comportements",
+    "une question hypothetique et creative",
+    "un 'qui dans ce serveur...' ou 'lequel de ces trucs...'",
+    "une question de type 'hot take / opinion impopulaire'",
+    "une question sur des preferences tres specifiques et de niche",
+]
 
-Reponds UNIQUEMENT en JSON valide avec cette structure exacte :
+async def generate_poll(theme: str) -> dict:
+    angle = random.choice(POLL_ANGLES)
+    seed = random.randint(1000, 9999)
+
+    prompt = f"""Tu es un createur de sondages Discord ultra creatif et divertissant.
+
+Cree UN sondage completement UNIQUE et ORIGINAL sur le theme : "{theme}".
+Angle impose : {angle}
+Seed de creativite : {seed} (utilise ce nombre pour varier ton inspiration)
+
+IMPORTANT : Evite absolument les questions generiques comme "Quel est ton X prefere ?".
+Sois specifique, surprenant, drole ou provocateur (dans le bon sens).
+
+Reponds UNIQUEMENT en JSON valide :
 {{
-  "question": "La question du sondage (max 300 caracteres)",
-  "answers": ["Reponse 1", "Reponse 2", "Reponse 3", "Reponse 4", "Reponse 5"]
+  "question": "La question (max 300 caracteres, accrocheuse et originale)",
+  "answers": ["Reponse A", "Reponse B", "Reponse C", "Reponse D"]
 }}
 
 Regles :
-- 3 a 5 reponses maximum
-- Question engageante et fun
-- Reponses courtes (max 55 caracteres chacune)
+- 3 a 5 reponses, courtes (max 55 caracteres)
+- La question doit donner envie de voter ET de debattre dans les commentaires
 - Uniquement du JSON, rien d autre"""
 
     def _call_groq():
         response = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Tu es un expert en engagement communautaire sur Discord. Tu crees des sondages originaux, jamais repetitifs, toujours adaptes au theme donne. Tu varies constamment le style et l angle des questions."
+                },
+                {"role": "user", "content": prompt}
+            ],
             response_format={"type": "json_object"},
-            temperature=0.9
+            temperature=1.2,
+            top_p=0.95,
         )
         return response.choices[0].message.content
 
