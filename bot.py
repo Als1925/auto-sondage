@@ -1,7 +1,8 @@
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import json
 import os
 import asyncio
@@ -38,15 +39,12 @@ def save_config(cfg):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
-config = load_config()
-
 # Discord + Gemini setup
 
 DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
-genai.configure(api_key=GEMINI_API_KEY)
-gemini = genai.GenerativeModel("gemini-2.0-flash")
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -69,8 +67,18 @@ Regles :
 - Reponses courtes (max 55 caracteres chacune)
 - Uniquement du JSON, rien d autre"""
 
-    response = await asyncio.to_thread(gemini.generate_content, prompt)
-    text = response.text.strip()
+    def _call_gemini():
+        response = gemini_client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json"
+            )
+        )
+        return response.text
+
+    text = await asyncio.to_thread(_call_gemini)
+    text = text.strip()
 
     # Strip markdown fences if present
     if text.startswith("```"):
@@ -79,8 +87,7 @@ Regles :
             text = text[4:]
     text = text.strip()
 
-    data = json.loads(text)
-    return data
+    return json.loads(text)
 
 # Poll sender
 
@@ -100,7 +107,6 @@ async def send_scheduled_poll(interaction: discord.Interaction = None):
         await report_error("Aucun salon configure. Utilise /setchannel d'abord.")
         return
 
-    # Try cache first, then fetch
     channel = bot.get_channel(int(channel_id))
     if not channel:
         try:
@@ -116,7 +122,6 @@ async def send_scheduled_poll(interaction: discord.Interaction = None):
         await report_error(f"Impossible de generer un sondage via Gemini : {type(e).__name__}: {e}")
         return
 
-    # Build Discord Poll
     answers = [discord.PollAnswer(text=ans) for ans in poll_data["answers"]]
     poll = discord.Poll(
         question=poll_data["question"],
@@ -126,23 +131,17 @@ async def send_scheduled_poll(interaction: discord.Interaction = None):
     )
 
     try:
-        # Send poll
         await channel.send(poll=poll)
-
-        # Send custom message
         custom_msg = await channel.send(cfg["custom_message"])
-
-        # Create public thread on custom message
         thread = await custom_msg.create_thread(
             name=poll_data["question"][:90],
             auto_archive_duration=1440
         )
         await thread.send(cfg["thread_hook"])
-
     except discord.Forbidden:
         await report_error(
             f"Le bot n'a pas les permissions dans le salon id {channel_id}. "
-            "Verifie que le bot a : Envoyer des messages, Creer des fils publics, Envoyer dans les fils."
+            "Verifie : Envoyer des messages, Creer des fils publics, Envoyer dans les fils."
         )
         return
     except Exception as e:
@@ -156,7 +155,6 @@ async def send_scheduled_poll(interaction: discord.Interaction = None):
         except Exception:
             pass
 
-    # Schedule next
     next_time = datetime.utcnow() + timedelta(minutes=cfg["interval_minutes"])
     cfg["next_poll_time"] = next_time.isoformat()
     save_config(cfg)
